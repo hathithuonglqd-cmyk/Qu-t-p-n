@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web Scanner - Quét Đáp Án</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Thư viện nhận diện mã ArUco -->
+    <script type="text/javascript" src="https://raw.githack.com/jcmellado/js-aruco/master/src/cv.js"></script>
+    <script type="text/javascript" src="https://raw.githack.com/jcmellado/js-aruco/master/src/aruco.js"></script>
+    <!-- Font Awesome cho icon -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+</head>
+<body class="bg-slate-100 flex flex-col h-screen font-sans">
+
+    <div class="flex-1 w-full max-w-lg mx-auto bg-white shadow-xl flex flex-col relative overflow-hidden">
+        
+        <!-- Header -->
+        <div class="bg-blue-600 text-white p-4 text-center shadow z-10">
+            <h1 class="text-xl font-bold uppercase tracking-wider"><i class="fa-solid fa-qrcode mr-2"></i>Máy Quét Trắc Nghiệm</h1>
+            <p class="text-sm text-blue-200">Không cần cài đặt ứng dụng</p>
+        </div>
+        
+        <!-- Camera Area -->
+        <div class="relative w-full bg-black flex-1 overflow-hidden flex items-center justify-center">
+            <video id="video" class="absolute w-full h-full object-cover" autoplay playsinline></video>
+            <!-- Canvas đè lên video để vẽ khung nhận diện -->
+            <canvas id="canvas" class="absolute w-full h-full object-cover"></canvas>
+            
+            <div id="start-overlay" class="absolute inset-0 bg-black/60 flex items-center justify-center z-20">
+                <button id="start-btn" class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 px-8 rounded-full shadow-lg transform transition active:scale-95 text-lg">
+                    <i class="fa-solid fa-camera mr-2"></i> Mở Camera Quét
+                </button>
+            </div>
+        </div>
+
+        <!-- Bảng điều khiển và thống kê -->
+        <div class="p-4 bg-white z-10 border-t-2 border-gray-200">
+            <div class="flex justify-between items-center mb-3">
+                <p class="text-gray-600 font-semibold text-sm">Trạng thái: <span id="status-text" class="text-blue-500">Đang chờ...</span></p>
+                <p class="text-gray-600 font-semibold text-sm">Đã quét: <span id="scan-count" class="text-green-600 font-bold text-lg">0</span></p>
+            </div>
+
+            <!-- Kết quả mới nhất -->
+            <div class="bg-slate-50 p-4 rounded-lg border border-slate-200 mb-2">
+                <div class="flex justify-between items-center">
+                    <div>
+                        <p class="text-xs text-gray-500 uppercase tracking-wider">Học sinh vừa quét</p>
+                        <p class="text-2xl font-black text-gray-800" id="last-id">--</p>
+                    </div>
+                    <div class="text-right">
+                        <p class="text-xs text-gray-500 uppercase tracking-wider">Đáp án</p>
+                        <p class="text-4xl font-black text-blue-600" id="last-answer">-</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const context = canvas.getContext('2d', { willReadFrequently: true });
+        
+        const startBtn = document.getElementById('start-btn');
+        const startOverlay = document.getElementById('start-overlay');
+        const statusText = document.getElementById('status-text');
+        const lastIdEl = document.getElementById('last-id');
+        const lastAnswerEl = document.getElementById('last-answer');
+        const scanCountEl = document.getElementById('scan-count');
+
+        let detector;
+        const GOOGLE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbx9wiu83BMXY69RLtEE1ja6p8GaFMTI2HRCyTg0JMBgDMkE0At4ee3085iVOGUPqA4a/exec';
+        
+        // Quản lý trạng thái chống spam (Cooldown)
+        const scannedData = new Map();
+        const COOLDOWN_TIME = 5000; // 5 giây chờ trước khi quét lại cùng một mã
+        let scanCount = 0;
+
+        startBtn.addEventListener('click', async () => {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } } 
+                });
+                video.srcObject = stream;
+                
+                // Ẩn overlay bắt đầu
+                startOverlay.classList.add('hidden');
+                statusText.innerText = "Đang quét...";
+                statusText.classList.replace('text-blue-500', 'text-green-500');
+
+                detector = new AR.Detector();
+                
+                // Đợi video chạy rồi mới bắt đầu scan
+                video.addEventListener('loadedmetadata', () => {
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    requestAnimationFrame(scan);
+                });
+
+            } catch (err) {
+                alert("Lỗi truy cập camera. Vui lòng cấp quyền cho trình duyệt!\n" + err.message);
+            }
+        });
+
+        function getAnswerFromCorners(corners) {
